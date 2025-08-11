@@ -1,132 +1,158 @@
 import os
+import subprocess
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
+import numpy as np
 import soundfile as sf
 import librosa
 import noisereduce as nr
-from spleeter.separator import Separator
-from demucs import Demucs
-import numpy as np
-from pydub import AudioSegment
-import soundfile as sf
 
-# Function to load an audio file and convert to waveform
-def load_audio(file_path):
-    audio, sr = librosa.load(file_path, sr=None)
-    return audio, sr
+class AudioEnhancerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Audio Enhancer Tool")
+        self.root.geometry("450x450")
 
-# Function to save audio as a WAV file
-def save_audio(output_path, audio, sr):
-    sf.write(output_path, audio, sr)
+        # Style
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
 
-# Function to denoise the audio
-def denoise_audio(audio, sr, passes=1):
-    for _ in range(passes):
-        audio = nr.reduce_noise(y=audio, sr=sr)
-    return audio
+        # Frame
+        frame = ttk.Frame(root, padding="20")
+        frame.pack(expand=True, fill=tk.BOTH)
 
-# Function to process with Demucs (Separates vocals from background)
-def demucs_separate(audio_file):
-    # Using Demucs for source separation (vocals, drums, etc.)
-    separator = Separator('demucs')
-    separator.separate_to_file(audio_file, './output_audio')
+        # UI Elements
+        self.create_widgets(frame)
 
-# Function to process with Spleeter (Separates vocals from background)
-def spleeter_separate(audio_file):
-    separator = Separator('spleeter:2stems')  # 2-stem model (vocals + accompaniment)
-    separator.separate(audio_file)
+    def create_widgets(self, parent):
+        """Creates and arranges all the UI widgets."""
+        # File Selection
+        ttk.Label(parent, text="Select Input Audio File:").grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+        self.file_entry = ttk.Entry(parent, width=50)
+        self.file_entry.grid(row=1, column=0, columnspan=2, sticky="we", padx=(0, 5))
+        ttk.Button(parent, text="Browse", command=self.browse_file).grid(row=1, column=2, sticky="we")
 
-# Function to normalize audio to a specific dB
-def normalize_audio(audio, target_dB=-3):
-    peak = np.max(np.abs(audio))
-    scaling_factor = 10**((target_dB - 20 * np.log10(peak)) / 20)
-    return audio * scaling_factor
+        # Denoise Passes
+        ttk.Label(parent, text="Denoise Passes:").grid(row=2, column=0, sticky="w", pady=10)
+        self.passes_entry = ttk.Spinbox(parent, from_=1, to=5, width=5)
+        self.passes_entry.set("1")
+        self.passes_entry.grid(row=2, column=1, sticky="w")
 
-# GUI setup
-def create_gui():
-    root = tk.Tk()
-    root.title("Audio Enhancer Tool")
+        # Normalization
+        self.normalize_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(parent, text="Normalize Audio to -3 dB", variable=self.normalize_var).grid(row=3, column=0, columnspan=2, sticky="w", pady=5)
 
-    def browse_file():
-        file_path = filedialog.askopenfilename(filetypes=[("Audio Files", "*.mp3;*.wav;*.flac")])
+        # Separation Model
+        ttk.Label(parent, text="Separation Model:").grid(row=4, column=0, sticky="w", pady=10)
+        self.separation_var = tk.StringVar(value='Demucs')
+        ttk.Radiobutton(parent, text="Demucs", variable=self.separation_var, value='Demucs').grid(row=5, column=0, sticky="w")
+        ttk.Radiobutton(parent, text="Spleeter", variable=self.separation_var, value='Spleeter').grid(row=5, column=1, sticky="w")
+
+        # Output Format
+        ttk.Label(parent, text="Output Format:").grid(row=6, column=0, sticky="w", pady=10)
+        self.output_format_var = tk.StringVar(value="wav")
+        ttk.Combobox(parent, textvariable=self.output_format_var, values=["wav", "flac", "mp3"], state="readonly").grid(row=6, column=1, sticky="w")
+
+        # Process Button
+        self.process_button = ttk.Button(parent, text="Process Audio", command=self.process_audio)
+        self.process_button.grid(row=7, column=0, columnspan=3, pady=20)
+        
+        # Progress Bar
+        self.progress = ttk.Progressbar(parent, orient=tk.HORIZONTAL, length=100, mode='determinate')
+        self.progress.grid(row=8, column=0, columnspan=3, sticky="we")
+
+    def browse_file(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Audio Files", "*.mp3 *.wav *.flac")])
         if file_path:
-            file_entry.delete(0, tk.END)
-            file_entry.insert(0, file_path)
+            self.file_entry.delete(0, tk.END)
+            self.file_entry.insert(0, file_path)
 
-    def process_audio():
-        file_path = file_entry.get()
-        if not os.path.exists(file_path):
-            messagebox.showerror("Error", "Invalid file path")
+    def process_audio(self):
+        input_path = self.file_entry.get()
+        if not os.path.exists(input_path):
+            messagebox.showerror("Error", "Invalid input file path.")
             return
-        
-        input_audio, sr = load_audio(file_path)
 
-        # Select options for the processing steps
-        passes = int(passes_entry.get())
-        output_type = output_type_var.get()
-        normalize = normalize_var.get()
+        self.process_button.config(state=tk.DISABLED)
+        self.progress['value'] = 0
+        self.root.update_idletasks()
 
-        # Denoise audio
-        denoised_audio = denoise_audio(input_audio, sr, passes)
-        
-        # Normalize audio if selected
-        if normalize:
-            denoised_audio = normalize_audio(denoised_audio)
-        
-        # Choose between Spleeter and Demucs for separation
-        if separation_type_var.get() == 'Demucs':
-            demucs_separate(file_path)
-            messagebox.showinfo("Processing Complete", "Audio processed with Demucs!")
-        elif separation_type_var.get() == 'Spleeter':
-            spleeter_separate(file_path)
-            messagebox.showinfo("Processing Complete", "Audio processed with Spleeter!")
+        try:
+            # 1. Denoise
+            self.progress['value'] = 10
+            self.root.update_idletasks()
+            audio, sr = librosa.load(input_path, sr=None, mono=False)
+            passes = int(self.passes_entry.get())
+            
+            # If stereo, denoise each channel separately
+            if audio.ndim > 1:
+                denoised_channels = [nr.reduce_noise(y=channel, sr=sr) for channel in audio]
+                denoised_audio = np.array(denoised_channels)
+            else:
+                denoised_audio = nr.reduce_noise(y=audio, sr=sr)
 
-        # Saving the final enhanced output
-        output_file = file_path.replace(".mp3", f"_enhanced.{output_type}")
-        save_audio(output_file, denoised_audio, sr)
+            # Transpose back to (samples, channels) for saving
+            if denoised_audio.ndim > 1:
+                 denoised_audio = denoised_audio.T
+            
+            self.progress['value'] = 40
+            self.root.update_idletasks()
 
-    # UI elements for the user interface
-    file_label = tk.Label(root, text="Select Input Audio File:")
-    file_label.pack()
+            # 2. Save denoised temporary file to pass to separator
+            temp_denoised_path = os.path.join(os.path.dirname(input_path), "temp_denoised.wav")
+            sf.write(temp_denoised_path, denoised_audio, sr)
 
-    file_entry = tk.Entry(root, width=50)
-    file_entry.pack()
+            # 3. Separate Vocals
+            output_dir = os.path.join(os.path.dirname(input_path), "output_audio")
+            os.makedirs(output_dir, exist_ok=True)
+            separator = self.separation_var.get()
+            
+            if separator == 'Demucs':
+                # Using subprocess for robust execution
+                command = ["demucs", "--two-stems=vocals", "-o", output_dir, temp_denoised_path]
+            else: # Spleeter
+                command = ["spleeter", "separate", "-p", "spleeter:2stems", "-o", output_dir, temp_denoised_path]
+            
+            subprocess.run(command, check=True, shell=True)
+            self.progress['value'] = 80
+            self.root.update_idletasks()
 
-    browse_button = tk.Button(root, text="Browse", command=browse_file)
-    browse_button.pack()
+            # 4. Normalize and Save Final Vocal Track
+            base_name = os.path.splitext(os.path.basename(input_path))[0]
+            if separator == 'Demucs':
+                separated_vocals_path = os.path.join(output_dir, "htdemucs", os.path.basename(temp_denoised_path).replace('.wav',''), "vocals.wav")
+            else: #Spleeter
+                separated_vocals_path = os.path.join(output_dir, os.path.splitext(os.path.basename(temp_denoised_path))[0], "vocals.wav")
 
-    passes_label = tk.Label(root, text="Enter Number of Denoise Passes:")
-    passes_label.pack()
+            if not os.path.exists(separated_vocals_path):
+                raise FileNotFoundError("Separated vocals file not found. Check separator output.")
 
-    passes_entry = tk.Entry(root)
-    passes_entry.insert(0, "1")  # Default pass is 1
-    passes_entry.pack()
+            vocals, sr_vocals = librosa.load(separated_vocals_path, sr=None)
+            
+            if self.normalize_var.get():
+                peak = np.max(np.abs(vocals))
+                if peak > 0:
+                    scaling_factor = 10**((-3 - 20 * np.log10(peak)) / 20)
+                    vocals = vocals * scaling_factor
+            
+            output_format = self.output_format_var.get()
+            final_output_path = os.path.join(os.path.dirname(input_path), f"{base_name}_enhanced_vocals.{output_format}")
+            sf.write(final_output_path, vocals, sr_vocals)
+            
+            # Cleanup temporary file
+            os.remove(temp_denoised_path)
 
-    normalize_var = tk.BooleanVar()
-    normalize_check = tk.Checkbutton(root, text="Normalize to -3 dB", variable=normalize_var)
-    normalize_check.pack()
+            self.progress['value'] = 100
+            messagebox.showinfo("Success", f"Processing complete!\nEnhanced file saved to:\n{final_output_path}")
 
-    separation_type_var = tk.StringVar(value='Demucs')
-    separation_label = tk.Label(root, text="Select Separation Model:")
-    separation_label.pack()
-
-    separation_radio1 = tk.Radiobutton(root, text="Demucs", variable=separation_type_var, value='Demucs')
-    separation_radio1.pack()
-
-    separation_radio2 = tk.Radiobutton(root, text="Spleeter", variable=separation_type_var, value='Spleeter')
-    separation_radio2.pack()
-
-    output_type_var = tk.StringVar(value="wav")
-    output_type_label = tk.Label(root, text="Choose Output File Format:")
-    output_type_label.pack()
-
-    output_type_menu = tk.OptionMenu(root, output_type_var, "mp3", "wav", "flac")
-    output_type_menu.pack()
-
-    process_button = tk.Button(root, text="Process Audio", command=process_audio)
-    process_button.pack()
-
-    root.mainloop()
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred: {e}")
+        finally:
+            self.process_button.config(state=tk.NORMAL)
+            self.progress['value'] = 0
 
 if __name__ == "__main__":
-    create_gui()
+    root = tk.Tk()
+    app = AudioEnhancerApp(root)
+    root.mainloop()
+
