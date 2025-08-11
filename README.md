@@ -33,13 +33,13 @@ A professional-grade, modular audio processing application featuring a modern, d
 ```
 
 aura-audio-suite/
-├── app.py             \# Main application file (GUI logic)
-├── engine.py          \# Core audio processing engine
-├── config.yaml        \# Main configuration for engine parameters
-├── presets.yaml       \# Stores user-saved presets
-├── requirements.txt   \# All Python dependencies
-└── launch.bat         \# Windows launcher script
-└── launch.sh          \# macOS / Linux launcher script
+├── app.py             # Main application file (GUI logic)
+├── engine.py          # Core audio processing engine
+├── config.yaml        # Main configuration for engine parameters
+├── presets.yaml       # Stores user-saved presets
+├── requirements.txt   # All Python dependencies
+└── launch.bat         # Windows launcher script
+└── launch.sh          # macOS / Linux launcher script
 
 ```
 
