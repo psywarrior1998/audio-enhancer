@@ -9,6 +9,7 @@ __pycache__/
 .cache
 .pytest_cache/
 .hypothesis/
+.idea/
 
 # --- Virtual Environments ---
 # The virtual environment contains installed libraries, not your source code.
