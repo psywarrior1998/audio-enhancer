@@ -34,12 +34,12 @@ The application is architected with a clean separation of concerns:
 ```
 
 aura-audio-suite/
-├── app.py             \# Main application file (GUI logic)
-├── engine.py          \# Core audio processing engine
-├── config.yaml        \# Main configuration for engine parameters
-├── presets.yaml       \# Stores user-saved presets
-├── requirements.txt   \# All Python dependencies
-└── launch.bat         \# Windows launcher script
+├── app.py             # Main application file (GUI logic)
+├── engine.py          # Core audio processing engine
+├── config.yaml        # Main configuration for engine parameters
+├── presets.yaml       # Stores user-saved presets
+├── requirements.txt   # All Python dependencies
+└── launch.bat         # Windows launcher script
 
 ````
 
