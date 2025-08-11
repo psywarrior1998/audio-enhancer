@@ -35,17 +35,24 @@ class AudioEngine:
             log.error(f"Failed to load Demucs model: {e}")
             raise RuntimeError(f"Could not load Demucs model '{model_name}'. Ensure it's a valid pretrained model name.")
 
+        # --- CORRECTED LOGIC ---
+        # Explicitly define the device and use it for both the model and the audio tensor.
         if use_cuda and torch.cuda.is_available():
-            model.to('cuda')
-            device_str = "CUDA"
+            device = 'cuda'
         else:
-            model.to('cpu')
-            device_str = "CPU"
-        log.info(f"Running Demucs separation on {device_str}.")
-        progress_callback("status", f"Separating vocals on {device_str}...")
+            device = 'cpu'
+        
+        log.info(f"Running Demucs separation on {device.upper()}.")
+        progress_callback("status", f"Separating vocals on {device.upper()}...")
+        
+        model.to(device)
+        # --- END CORRECTION ---
 
         wav = AudioFile(input_path).read(streams=0, samplerate=model.samplerate, channels=model.audio_channels)
-        wav = wav.to(model.device)
+        # --- CORRECTED LOGIC ---
+        # Move the audio tensor to the same device as the model.
+        wav = wav.to(device)
+        # --- END CORRECTION ---
         
         # apply_model returns a tensor of all separated sources
         sources = apply_model(model, wav[None], split=True, overlap=0.25, progress=True)[0]
