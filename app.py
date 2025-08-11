@@ -16,36 +16,28 @@ import torch
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-from engine import AudioEngine
+from engine import AudioEngine, UserCancelledError
 
 # --- Centralized Logging Setup ---
 def setup_logging():
-    """Configures the central logger for the application."""
     logger = logging.getLogger("aura_audio_suite")
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    if logger.hasHandlers():
-        return logger
-    log_dir = 'logs'
-    os.makedirs(log_dir, exist_ok=True)
-    file_handler = logging.FileHandler(os.path.join(log_dir, 'app.log'), mode='w')
-    file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(file_formatter)
-    logger.addHandler(file_handler)
-    stream_handler = logging.StreamHandler()
-    stream_formatter = logging.Formatter('%(levelname)s: %(message)s')
-    stream_handler.setFormatter(stream_formatter)
-    logger.addHandler(stream_handler)
+    if not logger.hasHandlers():
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        log_dir = 'logs'
+        os.makedirs(log_dir, exist_ok=True)
+        file_handler = logging.FileHandler(os.path.join(log_dir, 'app.log'), mode='w')
+        file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
+        stream_handler = logging.StreamHandler()
+        stream_formatter = logging.Formatter('%(levelname)s: %(message)s')
+        stream_handler.setFormatter(stream_formatter)
     return logger
 
 log = setup_logging()
 
 class AudioProcessorApp(ctk.CTk):
-    """
-    Professional audio processing GUI. Now features direct status reporting
-    from the processing engine instead of a progress bar.
-    """
-
     def __init__(self, engine: AudioEngine):
         super().__init__()
         self.engine = engine
@@ -56,56 +48,130 @@ class AudioProcessorApp(ctk.CTk):
         self.sep_model_map = {v['display_name']: k for k, v in self.config['separation_models'].items()}
         self.is_cuda_available = torch.cuda.is_available()
         self.playback_thread = None
+        self.stop_event = threading.Event()
 
-        self.title("Aura Audio Suite v3.2 (Professional) | by Sanyam Sanjay Sharma")
-        self.geometry("850x900") # Reduced height after removing progress bar
+        self.title("Aura Audio Suite v3.4 (Professional) | by Sanyam Sanjay Sharma")
+        self.geometry("850x950")
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
-
-        self.grid_columnconfigure(0, weight=3)
-        self.grid_columnconfigure(1, weight=2)
-        self.grid_rowconfigure(0, weight=1)
-
+        self.grid_columnconfigure(0, weight=3); self.grid_columnconfigure(1, weight=2); self.grid_rowconfigure(0, weight=1)
         self._create_widgets()
         log.info("Application initialized successfully.")
 
     def _create_status_display(self, parent: ctk.CTkFrame):
-        """Creates the status label and action buttons."""
         status_frame = ctk.CTkFrame(parent)
         status_frame.grid(row=1, column=0, sticky="ew", pady=(20, 0))
         status_frame.grid_columnconfigure((0, 1), weight=1)
-
-        # --- MODIFICATION: Progress bar is removed ---
         self.status_label = ctk.CTkLabel(status_frame, text="Status: Idle", anchor="w", justify="left")
-        self.status_label.grid(row=0, column=0, columnspan=2, padx=10, pady=(10,10), sticky="ew")
-
+        self.status_label.grid(row=0, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
+        self.progress = ctk.CTkProgressBar(status_frame, mode='determinate'); self.progress.set(0)
+        self.progress.grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
         self.preview_button = ctk.CTkButton(status_frame, text="Preview Snippet", command=lambda: self.start_processing_thread(preview=True))
-        self.preview_button.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        self.preview_button.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
         self.process_button = ctk.CTkButton(status_frame, text="Process Full Audio", command=self.start_processing_thread)
-        self.process_button.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+        self.process_button.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
+        self.stop_button = ctk.CTkButton(status_frame, text="Stop Process", command=self.stop_processing, fg_color="#E53935", hover_color="#C62828")
 
-    def progress_callback(self, event_type: str, *args: Any):
-        """Handles status updates from the engine thread."""
-        # --- MODIFICATION: 'progress' event type is no longer needed ---
-        if event_type == "status":
-            self.update_status(f"Status: {args[0]}")
-        elif event_type == "demucs_output":
-            # Displaying the raw output from demucs
-            self.update_status(args[0])
-        elif event_type == "error":
-            messagebox.showerror("Processing Error", f"An error occurred: {args[0]}")
-        elif event_type == "success":
-            messagebox.showinfo("Success", args[0])
+    def stop_processing(self):
+        if self.is_processing:
+            log.warning("Stop button clicked by user.")
+            self.stop_event.set()
+            self.stop_button.configure(state="disabled", text="Stopping...")
 
-    def update_status(self, text: str):
-        """Updates the status label."""
-        # --- MODIFICATION: Only updates the label now ---
-        self.status_label.configure(text=text)
+    def start_processing_thread(self, preview: bool = False, file_path: Optional[str] = None):
+        path = file_path or self.file_entry.get()
+        if not path or not os.path.exists(path): messagebox.showerror("Error", "Please select a valid audio file first."); return
+        if self.is_processing: messagebox.showwarning("Busy", "Another process is already running."); return
+        self.stop_event.clear()
+        self.is_processing = True
+        self.toggle_ui_state(processing=True)
+        thread = threading.Thread(target=self.process_audio, args=(path, self._get_processing_options(), preview, self.stop_event), daemon=True)
+        thread.start()
+        
+    def process_audio(self, path: str, options: Dict[str, Any], preview: bool, stop_event: threading.Event):
+        temp_path, processed_path = None, None
+        try:
+            if preview:
+                self.progress_callback("status", "Generating preview...", 0); audio = AudioSegment.from_file(path); snippet = audio[:self.config['preview_duration_ms']]
+                temp_dir = os.path.join(os.path.dirname(path), self.config.get('temp_directory_name', 'temp_processing')); os.makedirs(temp_dir, exist_ok=True)
+                temp_path = os.path.join(temp_dir, "preview_temp.wav"); snippet.export(temp_path, format="wav")
+                processed_path = self.engine.run_pipeline(temp_path, options, self.progress_callback, stop_event)
+                processed_snippet = AudioSegment.from_file(processed_path)
+                if not stop_event.is_set():
+                    self.progress_callback("status", "Playing preview...", 0)
+                    self.playback_thread = threading.Thread(target=play, args=(processed_snippet,), daemon=True)
+                    self.playback_thread.start()
+            else:
+                final_path = self.engine.run_pipeline(path, options, self.progress_callback, stop_event)
+                if not stop_event.is_set():
+                    self.progress_callback("success", f"Processing complete!\nFile saved to:\n{final_path}")
+        except UserCancelledError:
+            log.info("Process was cancelled by the user.")
+            self.update_status("Status: Process Cancelled", 0)
+        except Exception as e:
+            log.error(f"Error during audio processing for {path}: {e}", exc_info=True)
+            self.progress_callback("error", str(e))
+        finally:
+            if self.playback_thread: self.playback_thread.join(timeout=self.config['preview_duration_ms'] / 1000.0 + 2)
+            if temp_path and os.path.exists(temp_path): os.remove(temp_path)
+            if processed_path and os.path.exists(processed_path): os.remove(processed_path)
+            self.is_processing = False
+            self.toggle_ui_state(processing=False)
+            if not self.stop_event.is_set():
+                self.update_status("Status: Idle", 0)
 
-    # No other functions need to be changed. The rest of app.py remains the same.
-    # The following is a truncated version for brevity. Assume all other methods
-    # from the previous complete version are present here.
+    def process_batch(self, folder_path: str, options: Dict[str, Any], stop_event: threading.Event):
+        audio_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.mp3', '.wav', '.flac'))]
+        if not audio_files: messagebox.showinfo("Info", "No audio files found."); self.is_processing = False; self.toggle_ui_state(processing=False); return
+        total_files = len(audio_files); log.info(f"Starting batch process for {total_files} files in {folder_path}")
+        
+        try:
+            for i, filename in enumerate(audio_files):
+                if stop_event.is_set(): raise UserCancelledError()
+                progress_percent = int(((i + 1) / total_files) * 100)
+                self.update_status(f"Batch: {i+1}/{total_files}: {filename}", progress_percent)
+                file_path = os.path.join(folder_path, filename)
+                
+                # --- CORRECTED LINE ---
+                # The stop_event must be passed to the engine pipeline here as well.
+                self.engine.run_pipeline(file_path, options, lambda *args: None, stop_event)
+                # --- END CORRECTION ---
+
+        except UserCancelledError:
+            log.info("Batch process was cancelled by the user.")
+            self.update_status("Status: Batch Cancelled", 0)
+        except Exception as e:
+             log.error(f"Failed to process batch file {filename}: {e}", exc_info=True)
+             messagebox.showerror("Batch Error", f"An error occurred on {filename}:\n{e}")
+        finally:
+            self.is_processing = False
+            self.toggle_ui_state(processing=False)
+            if not stop_event.is_set():
+                self.update_status("Batch process complete!", 100)
+            log.info("Batch process finished.")
+
+    def start_batch_thread(self):
+        folder_path = self.batch_entry.get()
+        if not folder_path or not os.path.isdir(folder_path): messagebox.showerror("Error", "Please select a valid folder."); return
+        if self.is_processing: messagebox.showwarning("Busy", "Another process is already running."); return
+        self.stop_event.clear()
+        self.is_processing = True
+        self.toggle_ui_state(processing=True)
+        thread = threading.Thread(target=self.process_batch, args=(folder_path, self._get_processing_options(), self.stop_event), daemon=True)
+        thread.start()
+
+    def toggle_ui_state(self, processing: bool):
+        if processing:
+            state = "disabled"; self.preview_button.grid_remove(); self.process_button.grid_remove()
+            self.stop_button.grid(row=2, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
+        else:
+            state = "normal"; self.stop_button.grid_remove(); self.preview_button.grid(); self.process_button.grid()
+            self.stop_button.configure(state="normal", text="Stop Process")
+        self.preset_menu.configure(state=state)
+        # The other buttons are now hidden/shown, so no need to disable them
+    
+    # The rest of the file is unchanged.
     def _load_presets(self):
         if not os.path.exists(self.presets_path): return {}
         try:
@@ -193,11 +259,11 @@ class AudioProcessorApp(ctk.CTk):
 
     def draw_waveform(self, path: str):
         try:
-            self.update_status("Status: Loading waveform..."); y, sr = librosa.load(path, sr=None, mono=True); self.ax.clear()
+            self.update_status("Status: Loading waveform...", 0); y, sr = librosa.load(path, sr=None, mono=True); self.ax.clear()
             librosa.display.waveshow(y, sr=sr, ax=self.ax, color='#00AFFF'); self.ax.set_xlabel(''); self.ax.set_ylabel(''); self.ax.set_yticks([])
-            self.canvas.draw(); self.update_status("Status: Idle")
+            self.canvas.draw(); self.update_status("Status: Idle", 0)
         except Exception as e:
-            self.update_status(f"Status: Error loading waveform"); log.error(f"Could not load waveform for {path}: {e}", exc_info=True); messagebox.showerror("Waveform Error", f"Could not load waveform:\n{e}")
+            self.update_status(f"Status: Error loading waveform", 0); log.error(f"Could not load waveform for {path}: {e}", exc_info=True); messagebox.showerror("Waveform Error", f"Could not load waveform:\n{e}")
 
     def _get_processing_options(self) -> Dict[str, Any]:
         return {'use_separation': self.sep_var.get(), 'separation_model': self.sep_model_map[self.sep_model_display_var.get()],'use_eq': self.eq_var.get(), 'eq_low': self.eq_low_var.get(), 'eq_mid': self.eq_mid_var.get(), 'eq_high': self.eq_high_var.get(),'use_gate': self.gate_var.get(), 'gate_threshold': self.config['defaults']['gate_threshold_dbfs'],'use_compression': self.compress_var.get(), 'use_cuda': self.use_cuda_var.get()}
@@ -227,55 +293,25 @@ class AudioProcessorApp(ctk.CTk):
             if preset_name in self.presets:
                 del self.presets[preset_name]; self._save_presets(); self.preset_var.set("Select Preset...")
                 self.preset_menu.configure(values=list(self.presets.keys()) or ["No Presets"]); self.update_status(f"Status: Preset '{preset_name}' deleted."); log.info(f"Deleted preset: {preset_name}")
-
-    def start_processing_thread(self, preview: bool = False, file_path: Optional[str] = None):
-        path = file_path or self.file_entry.get()
-        if not path or not os.path.exists(path): messagebox.showerror("Error", "Please select a valid audio file first."); return
-        if self.is_processing: messagebox.showwarning("Busy", "Another process is already running."); return
-        self.is_processing = True; self.toggle_ui_state(tk.DISABLED)
-        thread = threading.Thread(target=self.process_audio, args=(path, self._get_processing_options(), preview), daemon=True); thread.start()
-
-    def start_batch_thread(self):
-        folder_path = self.batch_entry.get()
-        if not folder_path or not os.path.isdir(folder_path): messagebox.showerror("Error", "Please select a valid folder."); return
-        if self.is_processing: messagebox.showwarning("Busy", "Another process is already running."); return
-        self.is_processing = True; self.toggle_ui_state(tk.DISABLED)
-        thread = threading.Thread(target=self.process_batch, args=(folder_path, self._get_processing_options()), daemon=True); thread.start()
-
-    def process_audio(self, path: str, options: Dict[str, Any], preview: bool):
-        temp_path, processed_path = None, None
-        try:
-            if preview:
-                self.progress_callback("status", "Generating preview..."); audio = AudioSegment.from_file(path); snippet = audio[:self.config['preview_duration_ms']]
-                temp_dir = os.path.join(os.path.dirname(path), self.config.get('temp_directory_name', 'temp_processing')); os.makedirs(temp_dir, exist_ok=True)
-                temp_path = os.path.join(temp_dir, "preview_temp.wav"); snippet.export(temp_path, format="wav")
-                processed_path = self.engine.run_pipeline(temp_path, options, self.progress_callback); processed_snippet = AudioSegment.from_file(processed_path)
-                self.progress_callback("status", "Playing preview..."); self.playback_thread = threading.Thread(target=play, args=(processed_snippet,), daemon=True); self.playback_thread.start()
-            else:
-                final_path = self.engine.run_pipeline(path, options, self.progress_callback); self.progress_callback("success", f"Processing complete!\nFile saved to:\n{final_path}")
-        except Exception as e:
-            log.error(f"Error during audio processing for {path}: {e}", exc_info=True); self.progress_callback("error", str(e))
-        finally:
-            if self.playback_thread: self.playback_thread.join(timeout=self.config['preview_duration_ms'] / 1000.0 + 2)
-            if temp_path and os.path.exists(temp_path): os.remove(temp_path)
-            if processed_path and os.path.exists(processed_path): os.remove(processed_path)
-            self.is_processing = False; self.toggle_ui_state(tk.NORMAL); self.update_status("Status: Idle")
-
-    def process_batch(self, folder_path: str, options: Dict[str, Any]):
-        audio_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.mp3', '.wav', '.flac'))]
-        if not audio_files: messagebox.showinfo("Info", "No audio files found."); self.is_processing = False; self.toggle_ui_state(tk.NORMAL); return
-        total_files = len(audio_files); log.info(f"Starting batch process for {total_files} files in {folder_path}")
-        for i, filename in enumerate(audio_files):
-            self.update_status(f"Batch: {i+1}/{total_files}: {filename}")
-            file_path = os.path.join(folder_path, filename)
-            try:
-                self.engine.run_pipeline(file_path, options, lambda *args: None)
-            except Exception as e:
-                log.error(f"Failed to process batch file {filename}: {e}", exc_info=True)
-        self.update_status("Batch process complete!"); self.is_processing = False; self.toggle_ui_state(tk.NORMAL); log.info("Batch process complete.")
-
-    def toggle_ui_state(self, state: str):
-        self.preview_button.configure(state=state); self.process_button.configure(state=state); self.preset_menu.configure(state=state)
+    
+    def progress_callback(self, event_type: str, *args: Any):
+        if event_type == "status":
+            self.update_status(f"Status: {args[0]}", args[1] if len(args) > 1 else None)
+        elif event_type == "demucs_output":
+            self.update_status(args[0])
+        elif event_type == "progress":
+            self.progress.set(args[0] / 100.0)
+        elif event_type == "error":
+            messagebox.showerror("Processing Error", f"An error occurred: {args[0]}")
+            self.update_status("Status: Error", 0)
+        elif event_type == "success":
+            messagebox.showinfo("Success", args[0])
+            self.update_status("Status: Complete!", 1)
+            
+    def update_status(self, text: str, progress: Optional[float] = None):
+        self.status_label.configure(text=text)
+        if progress is not None:
+            self.progress.set(progress / 100.0 if progress > 1 else progress)
 
     def _on_closing(self):
         if self.is_processing and not messagebox.askyesno("Exit", "A process is still running. Are you sure you want to exit?"): return
@@ -283,8 +319,8 @@ class AudioProcessorApp(ctk.CTk):
 
 if __name__ == "__main__":
     try:
-        audio_engine = AudioEngine()
-        app = AudioProcessorApp(engine=audio_engine)
+        engine = AudioEngine()
+        app = AudioProcessorApp(engine=engine)
         app.mainloop()
     except FileNotFoundError as e:
         log.critical(f"Fatal Error: config.yaml not found. {e}", exc_info=True); messagebox.showerror("Fatal Error", "config.yaml not found.")
