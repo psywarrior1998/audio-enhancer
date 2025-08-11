@@ -1,92 +1,84 @@
-# engine.py
-
 import os
 import yaml
 import logging
+import subprocess
+import re
+import numpy as np # <-- Ensure numpy is imported
 from pydub import AudioSegment, effects
 from pydub.silence import split_on_silence
 from scipy.signal import iirfilter, sosfilt
 
-# --- Direct API Imports ---
-import torch
-from demucs.apply import apply_model
-from demucs.pretrained import get_model
-from demucs.audio import AudioFile, save_audio
-
-# Get the logger configured in the main app
 log = logging.getLogger("aura_audio_suite")
 
 class AudioEngine:
-    """Handles all audio processing logic using direct APIs."""
+    """
+    Handles all audio processing logic. Uses subprocess for Demucs to
+    capture and display its real-time text output.
+    """
 
     def __init__(self, config_path='config.yaml'):
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 
-    def _run_demucs_separation(self, input_path: str, model_name: str, use_cuda: bool, progress_callback) -> AudioSegment:
+    def _run_demucs_separation_with_live_output(self, input_path: str, model_key: str, use_cuda: bool, temp_dir: str, progress_callback):
         """
-        Runs Demucs separation using its native Python API.
-        Returns the separated vocal track as a pydub AudioSegment.
+        Runs Demucs via subprocess to capture its detailed stderr output.
         """
-        progress_callback("status", f"Loading Demucs model: {model_name}...")
-        try:
-            model = get_model(name=model_name)
-        except Exception as e:
-            log.error(f"Failed to load Demucs model: {e}")
-            raise RuntimeError(f"Could not load Demucs model '{model_name}'. Ensure it's a valid pretrained model name.")
+        model_info = self.config['separation_models'][model_key]
+        device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
+        
+        cmd = [
+            "python", "-m", "demucs",
+            "-d", device,
+            "-n", model_info['name'],
+            "--two-stems=vocals",
+            "-o", temp_dir,
+            f'"{input_path}"'
+        ]
+        cmd_str = " ".join(cmd)
+        log.info(f"Executing command: {cmd_str}")
 
-        # --- CORRECTED LOGIC ---
-        # Explicitly define the device and use it for both the model and the audio tensor.
-        if use_cuda and torch.cuda.is_available():
-            device = 'cuda'
-        else:
-            device = 'cpu'
-        
-        log.info(f"Running Demucs separation on {device.upper()}.")
-        progress_callback("status", f"Separating vocals on {device.upper()}...")
-        
-        model.to(device)
-        # --- END CORRECTION ---
-
-        wav = AudioFile(input_path).read(streams=0, samplerate=model.samplerate, channels=model.audio_channels)
-        # --- CORRECTED LOGIC ---
-        # Move the audio tensor to the same device as the model.
-        wav = wav.to(device)
-        # --- END CORRECTION ---
-        
-        # apply_model returns a tensor of all separated sources
-        sources = apply_model(model, wav[None], split=True, overlap=0.25, progress=True)[0]
-        
-        # Find the 'vocals' source
-        if 'vocals' not in model.sources:
-             raise RuntimeError(f"The model '{model_name}' does not provide a 'vocals' stem.")
-        
-        vocals_tensor = sources[model.sources.index('vocals')]
-        
-        # Convert tensor back to a pydub AudioSegment for the rest of the pipeline
-        vocals_np = vocals_tensor.cpu().numpy().T
-        if vocals_np.ndim == 1:
-            vocals_np = vocals_np[:, None] # Ensure stereo format for AudioSegment
-
-        vocals_segment = AudioSegment(
-            data=vocals_np.tobytes(),
-            sample_width=vocals_tensor.dtype.itemsize,
-            frame_rate=model.samplerate,
-            channels=vocals_tensor.shape[0]
+        process = subprocess.Popen(
+            cmd_str,
+            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            text=True,
+            universal_newlines=True,
+            shell=True
         )
-        return vocals_segment
+        
+        for line in iter(process.stderr.readline, ''):
+            clean_line = line.strip()
+            if clean_line:
+                progress_callback("demucs_output", clean_line)
+        
+        process.wait()
+        if process.returncode != 0:
+            log.error(f"Demucs process failed with return code {process.returncode}")
+            raise RuntimeError("Demucs separation failed. Check the logs for details.")
+
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        vocals_path = os.path.join(temp_dir, model_info['name'], base_name, "vocals.wav")
+        
+        if not os.path.exists(vocals_path):
+            log.error(f"Separated vocals file not found at expected path: {vocals_path}")
+            raise FileNotFoundError("Separated vocals file not found after processing.")
+            
+        return AudioSegment.from_file(vocals_path)
 
     def _create_band_pass_filter(self, low_cut, high_cut, sr, order=5):
-        nyq = 0.5 * sr
-        low = low_cut / nyq
-        high = high_cut / nyq
-        sos = iirfilter(order, [low, high], btype='band', analog=False, ftype='butter', output='sos')
-        return sos
+        nyq = 0.5 * sr; low = low_cut / nyq; high = high_cut / nyq
+        return iirfilter(order, [low, high], btype='band', analog=False, ftype='butter', output='sos')
 
     def apply_eq(self, segment, low_gain, mid_gain, high_gain):
         sr = segment.frame_rate
         samples = segment.get_array_of_samples()
         
+        # --- CORRECTED LINE ---
+        # Convert the standard Python array from pydub into a NumPy array.
+        samples = np.array(samples)
+        # --- END CORRECTION ---
+
         low_filter = self._create_band_pass_filter(30, 250, sr)
         mid_filter = self._create_band_pass_filter(250, 4000, sr)
         high_filter = self._create_band_pass_filter(4000, 16000, sr)
@@ -103,15 +95,13 @@ class AudioEngine:
 
     def apply_compression(self, segment):
         params = self.config['defaults']
-        return effects.compress_dynamic_range(
-            segment,
-            threshold=params['compression_threshold_dbfs'],
-            ratio=params['compression_ratio']
-        )
+        return effects.compress_dynamic_range(segment, threshold=params['compression_threshold_dbfs'], ratio=params['compression_ratio'])
 
     def run_pipeline(self, input_path, options, progress_callback):
         output_dir = os.path.join(os.path.dirname(input_path), self.config['output_directory_name'])
+        temp_dir = os.path.join(output_dir, self.config['temp_directory_name'])
         os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(temp_dir, exist_ok=True)
 
         log.info(f"Starting pipeline for {input_path} with options: {options}")
         current_audio = AudioSegment.from_file(input_path)
@@ -123,11 +113,10 @@ class AudioEngine:
             output_suffix += "_vocals"
             
             if 'demucs' in model_key:
-                model_info = self.config['separation_models'][model_key]
-                current_audio = self._run_demucs_separation(input_path, model_info['name'], use_cuda, progress_callback)
-            elif 'spleeter' in model_key:
-                log.error("Spleeter API call is not implemented in this version.")
-                raise NotImplementedError("Spleeter direct API integration is not supported in this version. Please use a Demucs model.")
+                current_audio = self._run_demucs_separation_with_live_output(input_path, model_key, use_cuda, temp_dir, progress_callback)
+            else:
+                log.error("Spleeter is not supported in this engine version.")
+                raise NotImplementedError("Only Demucs models are supported for status reporting.")
             
         if options.get('use_eq'):
             progress_callback("status", "Applying Equalizer...")
@@ -144,7 +133,7 @@ class AudioEngine:
             output_suffix += "_compressed"
             current_audio = self.apply_compression(current_audio)
 
-        progress_callback("status", "Normalizing and saving...", 98)
+        progress_callback("status", "Normalizing and saving...")
         final_audio = effects.normalize(current_audio)
         base_name = os.path.splitext(os.path.basename(input_path))[0]
         final_output_path = os.path.join(output_dir, f"{base_name}{output_suffix}.wav")
