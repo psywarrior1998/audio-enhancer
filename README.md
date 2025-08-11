@@ -1,47 +1,29 @@
-# Aura Audio Suite v3.0 (Professional)
+# Aura Audio Suite v3.1 (Professional)
 
 **Author:** Sanyam Sanjay Sharma
 
 A professional-grade, modular audio processing application featuring a modern graphical user interface, an interactive waveform display, and a powerful, multi-stage processing engine. This suite is designed for AI-powered vocal separation, equalization, noise gating, and dynamic compression.
 
-
+**Version 3.1 introduces a major internal refactor, replacing slow subprocess calls with direct Python API integration for a significant performance and reliability boost.**
 
 ---
 
 ## Key Features
 
-- **Visual Waveform Display**: Interactively view the audio waveform and see the impact of your processing in real-time.
+- **Direct API Integration**: Engine now calls `demucs` directly for a **10x+ speed increase** and greater stability, removing the need for external command-line tools in the system PATH.
+- **Visual Waveform Display**: Interactively view the audio waveform.
 - **Professional Workflow**:
-    - **Preset System**: Save and load your entire processing chain configuration to a preset for instant recall.
-    - **Real-Time Preview**: Instantly hear how your settings sound on a short snippet without processing the entire file.
-    - **Batch Processing**: Apply the same enhancement settings to an entire folder of audio files automatically.
+    - **Full Preset Management**: **Save, load, and delete** your entire processing chain configuration.
+    - **Non-Blocking Preview**: Instantly hear a short snippet without freezing the application.
+    - **Batch Processing**: Apply the same enhancement settings to an entire folder of audio files.
 - **Advanced Audio Engine**:
     - **Modular Chain**: Independently enable or disable modules for Vocal Separation, Parametric EQ, Noise Gating, and Compression.
-    - **AI Vocal Separation**: Utilizes state-of-the-art Demucs models to isolate vocals from an instrumental track.
-    - **3-Band Parametric EQ**: Precisely shape the tonal balance of your audio with adjustable Low, Mid, and High frequency bands.
-- **Performance**:
-    - **GPU Acceleration**: Automatically detects and utilizes a compatible NVIDIA GPU (CUDA) for a 10x+ speed increase on AI tasks.
-    - **Multi-threaded**: The UI remains perfectly responsive while the engine processes audio in the background.
-- **Modern UI**: A sleek, dark-themed interface built with a modern framework for a professional user experience.
-- **Highly Configurable**: Core parameters and model settings are managed in an external `config.yaml` for easy customization.
-
----
-
-## Project Structure
-
-The application is architected with a clean separation of concerns:
-
-```
-
-aura-audio-suite/
-├── app.py             # Main application file (GUI logic)
-├── engine.py          # Core audio processing engine
-├── config.yaml        # Main configuration for engine parameters
-├── presets.yaml       # Stores user-saved presets
-├── requirements.txt   # All Python dependencies
-└── launch.bat         # Windows launcher script
-
-````
+    - **AI Vocal Separation**: Utilizes state-of-the-art Demucs models to isolate vocals.
+    - **3-Band Parametric EQ**: Precisely shape the tonal balance of your audio.
+- **Performance & Stability**:
+    - **GPU Acceleration**: Automatically utilizes a compatible NVIDIA GPU (CUDA) for AI tasks.
+    - **Multi-threaded & Robust**: The UI remains perfectly responsive while the engine processes audio in the background. Errors are now logged to a `logs/app.log` file for easier debugging.
+- **Modern UI**: A sleek, dark-themed interface built for a professional user experience.
 
 ---
 
@@ -53,29 +35,22 @@ aura-audio-suite/
 - **FFmpeg**: Must be installed and available in your system's PATH. This is critical for audio file handling.
 
 ### 2. Installation
-The provided launcher script handles everything automatically.
+The provided launcher scripts handle everything automatically.
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/psywarrior1998/aura-audio-suite
-    cd aura-audio-suite
-    ```
+1.  **Clone the repository.**
+2.  **Run the appropriate launcher for your OS:**
+    -   On **Windows**, double-click `launch.bat`.
+    -   On **macOS or Linux**, open your terminal, navigate to the project folder, and run: `bash launch.sh`.
 
-2.  **Run the launcher:**
-    - On Windows, simply double-click `launch.bat`.
-    - **On the first run**, it will automatically create a Python virtual environment (`venv`), install all required dependencies (including PyTorch for GPU support), and then launch the application. This may take several minutes.
-    - Subsequent runs will be much faster as they will use the existing environment.
+    **On the first run**, the script will automatically create a Python virtual environment (`venv`), install all required dependencies (including PyTorch), and then launch the application. This may take several minutes. Subsequent runs will be much faster.
 
 ---
 
 ## How to Use
 
-1.  **Launch the application** using `launch.bat`.
-2.  **Select an Input File**: Click "Browse" to load an audio file. The waveform will appear in the right-hand panel.
-3.  **Load a Preset (Optional)**: Use the "Select Preset..." dropdown to instantly apply saved settings.
-4.  **Configure the Processing Chain**: In the "Processing" tab, enable the modules you need and adjust their parameters (EQ sliders, AI model, etc.).
-5.  **Preview Snippet**: Click this button to hear a short preview of your current settings.
-6.  **Process Full Audio**: When satisfied, click this button to process the entire file. The output will be saved in a new `output_audio` folder.
-7.  **Save a Preset**: If you've created a configuration you like, click "Save" next to the preset menu to name and save it for future use.
-8.  **Batch Processing**: To process multiple files, go to the "Batch" tab, select a folder, and start the process. It will use the currently active settings from the "Processing" tab.
-9.  **Settings**: In the "Settings" tab, you can enable or disable GPU acceleration if an NVIDIA GPU is detected.
+1.  **Launch the application** using `launch.bat` (Windows) or `bash launch.sh` (macOS/Linux).
+2.  **Select an Input File**: Click "Browse" to load an audio file.
+3.  **Manage Presets**: Use the dropdown to load a preset. Click "Save" to create a new one or "Delete" to remove the selected one.
+4.  **Configure the Processing Chain**: In the "Processing" tab, enable and adjust the modules.
+5.  **Preview Snippet**: Click to hear a short, non-blocking preview of your settings.
+6.  **Process Full Audio**: Click to process the entire file. The output will be saved in a new `output_audio` folder.
