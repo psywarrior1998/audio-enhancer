@@ -6,7 +6,7 @@ import re
 import numpy as np
 import torch
 import threading
-import queue # For thread-safe communication
+import queue
 
 from pydub import AudioSegment, effects
 from pydub.silence import split_on_silence
@@ -20,8 +20,8 @@ class UserCancelledError(Exception):
 
 class AudioEngine:
     """
-    Handles all audio processing logic with cancellable operations.
-    This version uses a thread-safe queue for cross-platform compatibility.
+    Final engine version using unbuffered subprocess output for real-time
+    progress reporting on all platforms.
     """
 
     def __init__(self, config_path='config.yaml'):
@@ -29,60 +29,52 @@ class AudioEngine:
             self.config = yaml.safe_load(f)
 
     def _run_demucs_separation_with_live_output(self, input_path: str, model_key: str, use_cuda: bool, temp_dir: str, progress_callback, stop_event: threading.Event):
-        """
-        Runs Demucs via subprocess and uses a dedicated thread to read its output,
-        ensuring cross-platform compatibility for the stop functionality.
-        """
         model_info = self.config['separation_models'][model_key]
         device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
         
-        cmd = ["python", "-m", "demucs", "-d", device, "-n", model_info['name'], "--two-stems=vocals", "-o", temp_dir, f'"{input_path}"']
+        # Use `python -u` for unbuffered output to ensure real-time progress
+        cmd = [
+            "python", "-u", "-m", "demucs",
+            "-d", device,
+            "-n", model_info['name'],
+            "--two-stems=vocals",
+            "-o", temp_dir,
+            f'"{input_path}"'
+        ]
         cmd_str = " ".join(cmd)
         log.info(f"Executing command: {cmd_str}")
 
         process = subprocess.Popen(cmd_str, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, universal_newlines=True, shell=True, encoding='utf-8')
         
-        # --- MODIFICATION: Thread-safe queue for reading output ---
-        q = queue.Queue()
-        
-        def reader_thread(pipe, q):
-            try:
-                for line in iter(pipe.readline, ''):
-                    q.put(line)
-            finally:
-                pipe.close()
-
-        threading.Thread(target=reader_thread, args=[process.stderr, q], daemon=True).start()
-        
-        progress_callback("status", "Step 1/5: Separating Vocals...")
-        
-        while process.poll() is None:
+        # This simple loop works because of the `-u` flag.
+        # It forces the process to output line-by-line without buffering.
+        for line in iter(process.stderr.readline, ''):
             if stop_event.is_set():
                 log.warning("Termination signal received, killing subprocess.")
                 process.terminate()
                 raise UserCancelledError("Process cancelled by user.")
-
-            try:
-                line = q.get(timeout=0.1)
-                clean_line = line.strip()
-                if clean_line:
-                    progress_callback("demucs_output", clean_line)
-                    match = re.search(r'(\d+)\s*%', clean_line)
-                    if match:
-                        percentage = int(match.group(1))
-                        scaled_percentage = percentage * 0.8
-                        progress_callback("progress", scaled_percentage)
-            except queue.Empty:
-                continue # No new output, continue loop to check stop_event
+            
+            clean_line = line.strip()
+            if not clean_line:
+                continue
+            
+            # Update the status label in the GUI with the raw console output
+            progress_callback("status", f"Separating: {clean_line}")
+            
+            # Find the percentage and update the GUI progress bar
+            match = re.search(r'(\d+)\s*%', clean_line)
+            if match:
+                percentage = int(match.group(1))
+                scaled_percentage = percentage * 0.8
+                progress_callback("progress", scaled_percentage)
         
+        process.wait()
         if process.returncode != 0 and not stop_event.is_set():
             raise RuntimeError("Demucs separation failed. Check the logs for details.")
 
         base_name = os.path.splitext(os.path.basename(input_path))[0]
         vocals_path = os.path.join(temp_dir, model_info['name'], base_name, "vocals.wav")
-        if not os.path.exists(vocals_path):
-            raise FileNotFoundError("Separated vocals file not found after processing.")
-            
+        if not os.path.exists(vocals_path): raise FileNotFoundError("Separated vocals file not found.")
         return AudioSegment.from_file(vocals_path)
 
     def run_pipeline(self, input_path, options, progress_callback, stop_event: threading.Event):
@@ -128,7 +120,6 @@ class AudioEngine:
         log.info(f"Pipeline complete. File saved to {final_output_path}")
         return final_output_path
 
-    # The rest of the file is unchanged.
     def _create_band_pass_filter(self, low_cut, high_cut, sr, order=5):
         nyq = 0.5 * sr
         low = low_cut / nyq
