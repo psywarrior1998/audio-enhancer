@@ -7,3 +7,6 @@ numpy
 pyyaml
 scipy
 customtkinter
+matplotlib
+torch
+torchaudio

@@ -24,7 +24,7 @@ REM Activate the environment
 CALL "%VENV_DIR%\Scripts\activate.bat"
 
 ECHO.
-ECHO Launching Veritas Audio Suite...
+ECHO Launching Aura Audio Suite...
 python app.py
 
 ECHO.
