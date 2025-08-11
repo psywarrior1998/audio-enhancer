@@ -1,0 +1,12 @@
+demucs
+spleeter
+pydub
+librosa
+soundfile
+numpy
+pyyaml
+scipy
+customtkinter
+matplotlib
+torch
+torchaudio

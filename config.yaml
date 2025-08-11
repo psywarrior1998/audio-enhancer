@@ -1,0 +1,27 @@
+# --- Audio Processing Configuration ---
+
+# Processing parameters
+defaults:
+  gate_threshold_dbfs: -40.0
+  compression_threshold_dbfs: -20.0
+  compression_ratio: 4.0
+
+# Directory settings
+output_directory_name: "output_audio"
+temp_directory_name: "temp_processing"
+
+# AI Model settings
+# You can add more models here in the future
+separation_models:
+  demucs_fast:
+    name: "htdemucs_ft"
+    display_name: "Demucs (Fastest)"
+  demucs_high_quality:
+    name: "htdemucs"
+    display_name: "Demucs (High Quality)"
+  spleeter:
+    name: "spleeter:2stems"
+    display_name: "Spleeter (CPU)"
+
+# Real-time preview settings
+preview_duration_ms: 5000 # 5 seconds
